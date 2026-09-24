@@ -72,6 +72,9 @@ Para o orquestrador carregar as instruções, adicione esta linha ao `CLAUDE.md`
 
 Se a raiz for um repositório git, coloque `.herdr-db/` no `.gitignore`.
 
+Para regras do seu time (idioma, convenção de commit, lista de repositórios...), use `PROJECT_INSTRUCTIONS` e
+`REPOSITORY_INSTRUCTIONS` na config: são arquivos `.md` somados às instruções geradas, e os templates continuam intactos.
+
 Opções do setup: `-c CONFIG` (default `./herdr-db.sh`), `--dry-run`, `--status`, `--check` e `--no-orchestrator`.
 
 ## Fila (`q`)
@@ -110,7 +113,7 @@ q fail <id> <<'FIM_Q' ... FIM_Q
   `OPENCODE_CONFIG=.herdr-db/agents/<nome>.opencode.json opencode debug agent <agente>`.
 - **Agentes podem estragar a própria ferramenta.** Um agente já sobrescreveu o `q` e atualizou o banco na mão depois
   de gravar uma resposta errada. Por isso o `answer` aceita correção, e a mensagem da tarefa proíbe mexer no `q` e no
-  banco. Se quiser uma trava extra (Linux/ext4, como root): `chattr +i contrib/herdr-db/bin/q`.
+  banco. Se quiser uma trava extra (Linux/ext4, como root): `chattr +i contrib/herdr-db/bin/q` (antes de um `git pull`, rode `chattr -i` no arquivo).
 - **Agentes que já estavam rodando não recarregam instruções.** Depois de mudar config ou modelo, feche a aba
   (`herdr tab close <id>`) e rode o setup de novo.
 - **Git é com o agente de repositório.** Mandar limpeza de branches para os agentes de projeto funciona, mas espalha a

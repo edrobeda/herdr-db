@@ -17,6 +17,11 @@ OPENCODE_AGENT=""            # ex.: "meu-agente" (NÃO pode declarar `permission
 # Edição nesses caminhos é negada.
 ROOT_READONLY=("*.md" "docs/**")
 
+# Instruções extras do seu workspace (convenções, idioma, regras de commit...), somadas às dos templates.
+# Caminhos relativos a ROOT_DIR ou absolutos. Não edite os templates: use estes arquivos.
+PROJECT_INSTRUCTIONS=()      # ex.: ("docs/agentes-projeto.md")
+REPOSITORY_INSTRUCTIONS=()   # ex.: ("docs/agente-repositorio.md")
+
 # Tempo máximo (ms) para cada agente ficar pronto ao iniciar (máx. 300000).
 START_TIMEOUT=90000
 

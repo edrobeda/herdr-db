@@ -37,6 +37,7 @@ json() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 
 [ -f "$CONFIG" ] || die "config não encontrada: $CONFIG (copie $HDB_HOME/examples/workspace.sh e ajuste)"
 OPENCODE_MODEL=""; OPENCODE_AGENT=""; ROOT_READONLY=("*.md"); START_TIMEOUT=90000
+PROJECT_INSTRUCTIONS=(); REPOSITORY_INSTRUCTIONS=()
 # shellcheck disable=SC1090
 source "$CONFIG"
 : "${WS_LABEL:?WS_LABEL não definido em $CONFIG}" "${ROOT_DIR:?ROOT_DIR não definido em $CONFIG}"
@@ -120,12 +121,26 @@ readonly_list() {
   echo "${out}\`$STATE/\`"
 }
 
+# abs_list <arquivos...>: caminhos absolutos (relativos a ROOT_DIR), um por linha; avisa se não existir
+abs_list() {
+  local f p
+  for f in "$@"; do
+    case "$f" in /*) p="$f" ;; *) p="$ROOT_DIR/$f" ;; esac
+    [ -f "$p" ] || warn "instrução extra não encontrada: $p" >&2
+    echo "$p"
+  done
+}
+
 # write_opencode_cfg <cfg> <md> <modo: project|git>
 write_opencode_cfg() {
-  python3 - "$1" "$2" "$3" "$ROOT_DIR" "$STATE" "$OPENCODE_MODEL" "$OPENCODE_AGENT" "${ROOT_READONLY[@]}" <<'PY'
-import json, sys
+  local extras
+  if [ "$3" = git ]; then extras="$(abs_list ${REPOSITORY_INSTRUCTIONS[@]+"${REPOSITORY_INSTRUCTIONS[@]}"})"
+  else extras="$(abs_list ${PROJECT_INSTRUCTIONS[@]+"${PROJECT_INSTRUCTIONS[@]}"})"; fi
+  HDB_EXTRAS="$extras" python3 - "$1" "$2" "$3" "$ROOT_DIR" "$STATE" "$OPENCODE_MODEL" "$OPENCODE_AGENT" "${ROOT_READONLY[@]}" <<'PY'
+import json, os, sys
 cfg, md, mode, root, state, model, agent, *ro = sys.argv[1:]
-c = {"$schema": "https://opencode.ai/config.json", "instructions": [md]}
+extras = [p for p in os.environ.get("HDB_EXTRAS", "").splitlines() if p]
+c = {"$schema": "https://opencode.ai/config.json", "instructions": [md] + extras}
 if model: c["model"] = model
 if agent: c["default_agent"] = agent
 if mode == "git":
@@ -151,8 +166,9 @@ EOF
   "$QSHIM" list >/dev/null   # cria o banco
   agents_md=""
   for entry in "${TABS[@]}"; do
-    IFS='|' read -r label _r kind name desc <<<"$entry"
+    IFS='|' read -r label rel kind name desc <<<"$entry"
     [ "$kind" = orchestrator ] && continue
+    [ "$rel" = "." ] || [ -d "$ROOT_DIR/$rel" ] || continue
     agents_md+="- \`$name\` ($kind, aba \`$label\`): $desc"$'\n'
   done
   render "$TEMPLATES/ORCHESTRATOR.md" "$STATE/ORCHESTRATOR.md" "WS=$WS_LABEL" "Q=$QSHIM" "AGENTS=${agents_md%$'\n'}" \
