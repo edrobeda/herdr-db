@@ -1,125 +1,239 @@
-# herdr-db — orquestrador + subagentes + fila em SQLite para o herdr
+# herdr-db — orchestrator + sub-agents + SQLite task queue for herdr
 
-> **Fork não oficial.** Esta branch (`custom/db-orchestrator`) adiciona ferramentas por cima do
+> **Unofficial fork.** This branch (`custom/db-orchestrator`) adds tooling on top of
 > [herdr](https://github.com/herdrdev/herdr) ([herdr.dev](https://herdr.dev)), "the runtime your coding agents live on",
-> de **herdrdev**, licenciado sob Apache-2.0. O código do herdr não foi alterado: tudo o que é novo está em
-> `contrib/herdr-db/`. Use e apoie o projeto original.
+> by **herdrdev**, licensed under Apache-2.0. herdr's code is unchanged: everything new lives in
+> `contrib/herdr-db/`. Please use and support the original project.
 
-*English summary:* a small toolkit on top of herdr that sets up a workspace with an orchestrator (Claude Code), one
-scoped OpenCode agent per project folder, a single repository agent that owns branches/commits/pushes, and a
-SQLite-backed task queue (`q`) so the orchestrator never has to scrape agent terminals: agents write their answers
-to the queue, the orchestrator waits on it, reviews and validates.
+A small toolkit on top of herdr. It sets up a workspace with:
 
-## O que tem aqui
+- an **orchestrator** (Claude Code);
+- one **scoped OpenCode agent per project folder**;
+- a single **repository agent** that owns branches, commits and pushes;
+- a **SQLite-backed task queue** (`q`), so the orchestrator never has to scrape agent terminals. Agents write their
+  answers to the queue, and the orchestrator waits on it, reviews and validates.
 
-| Arquivo | Papel |
+## Why this exists
+
+herdr solves the hard part really well. It keeps many coding agents alive in tabs, with detectable state (`idle`,
+`working`, `blocked`, `done`), and offers an API to send prompts and read terminals. Running herdr day to day with an
+orchestrator and several agents over a workspace with many repositories, we hit problems that were not herdr's fault.
+They came from how the work on top of it was organized:
+
+1. **The orchestrator kept reading the agents' screens.** To know whether a task was done, it called `herdr agent
+   read` over and over. That burned context on terminal chrome (borders, side panel, spinners) and was fragile: the
+   answer came back truncated, mixed with the model list, or already scrolled out of view.
+2. **No record of what was asked and what was delivered.** When the conversation ended, everything went with it:
+   the prompt sent to each agent, its answer, and what was checked. Nothing could be resumed or audited later.
+3. **"Done" did not mean done.** An agent said it had finished, and nobody checked independently.
+4. **Blurry scope.** Any agent could edit any folder and touch git. In practice, branch cleanups were scattered across
+   several agents, and uncommitted work got stuck on an old branch.
+5. **Setting up the workspace was manual.** Recreating the tabs, model, permissions and each agent's instructions after
+   a reboot took time and relied on memory.
+
+herdr-db answers with four small pieces:
+
+- a **SQLite queue** where the agent writes the answer and the orchestrator reads it;
+- **roles whose scope is enforced by permissions**, not just by instructions: project agent, repository agent and
+  orchestrator;
+- an explicit **validation** step;
+- an **idempotent setup** driven by a config file.
+
+## Example (fictional)
+
+> Illustrative scenario. The company, repositories, ticket and outputs are made up to show the flow.
+> The commands and output formats are the real ones.
+
+**Acme Deliveries** has three repositories in `~/acme`: `api` (Node/Express), `web` (React) and `app` (React Native).
+Ticket *ACME-512: "customers cannot enter the address line 2"* comes in.
+
+**1. Set up the workspace** (once; after a reboot, just run it again):
+
+```sh
+cd ~/acme && herdr-db-setup
+# creates the orchestrator, api, web, app and repository tabs, each with the right agent, model, permissions and instructions
+```
+
+**2. The request.** You tell the orchestrator: *"fix ACME-512"*. It reads the code (read-only), finds that the field
+must exist in the API and in the web form, and splits the work:
+
+```sh
+q add api - <<'EOF'
+ACME-512: add `address_line2` (optional string, up to 120 chars) to the customer address.
+Migration + model + validation on POST/PUT /customers/:id/address + test. Do not touch other routes.
+Answer: changed files, test output.
+EOF
+q add web - <<'EOF'
+ACME-512: optional "Address line 2" field in the address form, sending `address_line2` to the API.
+Answer: changed files, lint and test output; say what was not tested in the browser.
+EOF
+q wait 1 2        # in the background; the orchestrator stays free and is notified when the answers arrive
+```
+
+**3. Validation catches a problem.** Both tasks come back `answered`. The orchestrator does not take the agent's word
+for it. It runs the API tests (they pass) and checks the web diff: the form sends `addressLine2`, not
+`address_line2`.
+
+```sh
+q validate 1 "api tests pass (checked)"
+q reject 2 "the payload sends 'addressLine2'; the API expects 'address_line2'" --retry
+#3 re-queued for web
+q wait 3
+q validate 3 "payload checked in the diff; lint ok"
+```
+
+**4. Version control goes through a single agent:**
+
+```sh
+q add repository-manager - <<'EOF'
+Create branch feat/ACME-512-address-line2 in api and web from main, commit only the files listed
+in tasks #1 and #3, and push. No PR.
+EOF
+```
+
+**5. The history stays.** Weeks later, someone asks why the field is limited to 120 characters:
+
+```sh
+q list --all
+#1    validated  api              10-02 14:03  ACME-512: add `address_line2` (optional string, up to 120 chars) to t…
+#2    rejected   web              10-02 14:03  ACME-512: optional "Address line 2" field in the address form, sendi…
+#3    validated  web              10-02 14:21  ACME-512: optional "Address line 2" field in the address form, sendi…
+#4    validated  repository-manager 10-02 14:30  Create branch feat/ACME-512-address-line2 in api and web from main,…
+q show 1      # the exact prompt, the agent's answer and the validation note
+```
+
+### What changes (qualitative comparison)
+
+| | Without herdr-db | With herdr-db |
+|---|---|---|
+| Knowing an agent is done | reading its terminal over and over | `q wait` in the background notifies |
+| Orchestrator context | spent on terminal chrome | only the answer text |
+| Agent stuck waiting for approval | only noticed by looking at the tab | `wait` returns and flags `blocked` |
+| The agent's "done" | accepted as is | `validate`/`reject --retry`, with a note |
+| Cross-project integration bug (e.g. field name) | shows up in QA or production | tends to show up in the orchestrator's validation |
+| Who can edit what | any agent, any folder | each agent only in its own folder; the repository agent edits no files |
+| Commit and push | scattered across agents | a single agent, with rules (no force, no secrets) |
+| History | gone with the conversation | `queue.db`: prompt, answer, timestamps and validation |
+| Rebuilding everything after a reboot | manual | `herdr-db-setup` |
+
+The gains depend on discipline: if the orchestrator skips validation or implements things itself, the queue becomes
+just a log. That is why the orchestrator instructions forbid both.
+
+## What's here
+
+| File | Role |
 |---|---|
-| `bin/herdr-db-setup` | monta/restaura o workspace a partir de um arquivo de config (idempotente) |
-| `bin/q` | CLI da fila de tarefas (SQLite), usada pelo orquestrador e pelos agentes |
-| `templates/project-agent.md` | instruções de cada agente de projeto |
-| `templates/repository-agent.md` | instruções do agente de repositório |
-| `templates/ORCHESTRATOR.md` | instruções do orquestrador (como delegar pela fila) |
-| `examples/workspace.sh` | config de exemplo |
+| `bin/herdr-db-setup` | builds/restores the workspace from a config file (idempotent) |
+| `bin/q` | task queue CLI (SQLite), used by the orchestrator and the agents |
+| `templates/project-agent.md` | instructions for each project agent |
+| `templates/repository-agent.md` | instructions for the repository agent |
+| `templates/ORCHESTRATOR.md` | instructions for the orchestrator (how to delegate through the queue) |
+| `examples/workspace.sh` | example config |
 
-## Arquitetura
+## Architecture
 
 ```
- você ──► orquestrador (Claude Code, raiz do workspace)
-             │  q add <agente> ...        q wait / q show / q validate
+ you ──► orchestrator (Claude Code, workspace root)
+             │  q add <agent> ...        q wait / q show / q validate
              ▼
-      ┌─────────────── fila (SQLite: <raiz>/.herdr-db/queue.db) ───────────────┐
+      ┌─────────────── queue (SQLite: <root>/.herdr-db/queue.db) ──────────────┐
       │ pending → sent → answered|failed → validated|rejected                   │
       └──────────────────────────────────────────────────────────────────────────┘
-             │ herdr agent prompt (1 tarefa por agente)     ▲ q answer <id>
+             │ herdr agent prompt (1 task per agent)        ▲ q answer <id>
              ▼                                               │
-   agentes de projeto (OpenCode, 1 por pasta)  ──────────────┘
-   agente de repositório (OpenCode, raiz): branch/commit/push, sem editar arquivos
+   project agents (OpenCode, 1 per folder)  ─────────────────┘
+   repository agent (OpenCode, root): branch/commit/push, edits no files
 ```
 
-- **Agentes de projeto:** cada um só escreve na própria pasta. Podem ler, sem pedir permissão, os caminhos da raiz
-  listados em `ROOT_READONLY` (docs), e não fazem commit nem push.
-- **Agente de repositório:** enxerga todos os repositórios, tem `edit: deny` em tudo e é o único que mexe em
-  versionamento.
-- **Orquestrador:** divide o trabalho, enfileira prompts autocontidos, espera pela fila e valida os resultados de forma
-  independente (git, testes) antes de aceitar.
+- **Project agents:** each one writes only in its own folder. They may read, without asking, the root paths listed in
+  `ROOT_READONLY` (docs), and they do not commit or push.
+- **Repository agent:** sees every repository, has `edit: deny` on everything and is the only one touching version
+  control.
+- **Orchestrator:** splits the work, enqueues self-contained prompts, waits on the queue and validates the results
+  independently (git, tests) before accepting them.
 
-## Instalação
+## Install
 
-Pré-requisitos: [herdr](https://herdr.dev), `python3`, `git`, [OpenCode](https://opencode.ai) e, para o orquestrador,
+Prerequisites: [herdr](https://herdr.dev), `python3`, `git`, [OpenCode](https://opencode.ai) and, for the orchestrator,
 [Claude Code](https://docs.anthropic.com/claude-code).
 
 ```sh
 git clone -b custom/db-orchestrator https://github.com/edrobeda/herdr-db.git
-cd <raiz-do-seu-workspace>
-cp /caminho/herdr-db/contrib/herdr-db/examples/workspace.sh herdr-db.sh   # ajuste WS_LABEL, TABS...
-herdr            # em outro terminal: o servidor do herdr precisa estar rodando
-/caminho/herdr-db/contrib/herdr-db/bin/herdr-db-setup --dry-run
-/caminho/herdr-db/contrib/herdr-db/bin/herdr-db-setup
+cd <your-workspace-root>
+cp /path/herdr-db/contrib/herdr-db/examples/workspace.sh herdr-db.sh   # adjust WS_LABEL, TABS...
+herdr            # in another terminal: the herdr server must be running
+/path/herdr-db/contrib/herdr-db/bin/herdr-db-setup --dry-run
+/path/herdr-db/contrib/herdr-db/bin/herdr-db-setup
 ```
 
-O setup gera tudo em `<raiz>/.herdr-db/`:
+The setup generates everything in `<root>/.herdr-db/`:
 
-- `q`: um shim que aponta a fila para o banco deste workspace;
-- `queue.db`: o banco da fila;
-- `ORCHESTRATOR.md`: as instruções do orquestrador;
-- `agents/<nome>.md` e `agents/<nome>.opencode.json`: as instruções e permissões de cada agente.
+- `q`: a shim that points the queue at this workspace's database;
+- `queue.db`: the queue database;
+- `ORCHESTRATOR.md`: the orchestrator instructions;
+- `agents/<name>.md` and `agents/<name>.opencode.json`: each agent's instructions and permissions.
 
-Para o orquestrador carregar as instruções, adicione esta linha ao `CLAUDE.md` da raiz:
+To make the orchestrator load its instructions, add this line to the root `CLAUDE.md`:
 
 ```
 @.herdr-db/ORCHESTRATOR.md
 ```
 
-Se a raiz for um repositório git, coloque `.herdr-db/` no `.gitignore`.
+If the root is a git repository, add `.herdr-db/` to `.gitignore`.
 
-Para regras do seu time (idioma, convenção de commit, lista de repositórios...), use `PROJECT_INSTRUCTIONS` e
-`REPOSITORY_INSTRUCTIONS` na config: são arquivos `.md` somados às instruções geradas, e os templates continuam intactos.
+For your team's rules (language, commit convention, list of repositories...), use `PROJECT_INSTRUCTIONS` and
+`REPOSITORY_INSTRUCTIONS` in the config. They are `.md` files added to the generated instructions, and the templates
+stay untouched.
 
-Opções do setup: `-c CONFIG` (default `./herdr-db.sh`), `--dry-run`, `--status`, `--check` e `--no-orchestrator`.
+Setup options: `-c CONFIG` (default `./herdr-db.sh`), `--dry-run`, `--status`, `--check` and `--no-orchestrator`.
 
-## Fila (`q`)
+## Queue (`q`)
 
 ```sh
-q add <agente> "<tarefa>"            # enfileira e despacha se o agente estiver livre (idle/done)
-q add <agente> - <<'EOF'             # tarefa longa via stdin
+q add <agent> "<task>"               # enqueue and dispatch if the agent is free (idle/done)
+q add <agent> - <<'EOF'              # long task via stdin
 ...
 EOF
-q wait [id ...] [--timeout S]        # espera as respostas; rode em background
+q wait [id ...] [--timeout S]        # wait for the answers; run it in the background
 q list [--all | --status S]
 q show <id>
-q validate <id> "nota"
-q reject <id> "motivo" --retry       # reenfileira para o mesmo agente, com o motivo
+q validate <id> "note"
+q reject <id> "reason" --retry       # re-queue for the same agent, with the reason
 q cancel <id>
-# usados pelos agentes:
-q answer <id> <<'FIM_Q' ... FIM_Q    # pode ser repetido para corrigir, até a tarefa ser validada
-q fail <id> <<'FIM_Q' ... FIM_Q
+# used by the agents:
+q answer <id> <<'END_Q' ... END_Q    # can be repeated to fix it, until the task is validated
+q fail <id> <<'END_Q' ... END_Q
 ```
 
-- **Uma tarefa por agente:** cada agente recebe uma tarefa de cada vez, e a próxima sai quando ele volta a ficar livre.
-- **Mensagem enviada:** a tarefa vai com um cabeçalho `[tarefa #N da fila do orquestrador]` e um rodapé que explica
-  exatamente como responder.
-- **Quando o `wait` para antes:** ele também termina quando um agente fica `blocked` (pedindo aprovação) ou fica livre
-  por mais de 90s sem ter gravado a resposta. Assim o orquestrador não espera para sempre.
-- **Validações da resposta:** o `q` recusa resposta vazia, resposta que seja só uma variável não expandida (ex.:
-  `$RESPONSE`, erro que já aconteceu na prática) e resposta para tarefa já validada.
-- **Banco:** `Q_DB` escolhe o banco (o shim já define). Sem ele, o padrão é `~/.local/share/herdr-db/queue.db`.
+- **One task per agent:** each agent gets one task at a time, and the next one goes out when it is free again.
+- **What gets sent:** the task goes with a `[task #N from the orchestrator queue]` header and a footer explaining
+  exactly how to answer.
+- **When `wait` returns early:** it also returns when an agent is `blocked` (waiting for approval) or has been idle for
+  more than 90s without storing an answer. That way the orchestrator never waits forever.
+- **Answer checks:** `q` rejects empty answers, answers that are just an unexpanded variable (e.g. `$RESPONSE`, which
+  happened in practice) and answers to tasks already validated.
+- **Database:** `Q_DB` selects the database (the shim sets it). Without it, the default is
+  `~/.local/share/herdr-db/queue.db`.
 
-## Lições aprendidas (vale ler antes de customizar)
+## Lessons learned (worth reading before customizing)
 
-- **Permissões em agentes `.md` do OpenCode ganham de tudo.** Se o agente primary (`OPENCODE_AGENT`) declarar
-  `permission` no frontmatter, essas regras são aplicadas depois do `OPENCODE_CONFIG` e anulam o escopo gerado aqui.
-  Um `edit: allow` libera o agente de repositório para editar arquivos; um `bash: ask` faz os agentes travarem em
-  `blocked` a cada comando. Deixe o agente primary sem `permission`. Para conferir as regras efetivas:
-  `OPENCODE_CONFIG=.herdr-db/agents/<nome>.opencode.json opencode debug agent <agente>`.
-- **Agentes podem estragar a própria ferramenta.** Um agente já sobrescreveu o `q` e atualizou o banco na mão depois
-  de gravar uma resposta errada. Por isso o `answer` aceita correção, e a mensagem da tarefa proíbe mexer no `q` e no
-  banco. Se quiser uma trava extra (Linux/ext4, como root): `chattr +i contrib/herdr-db/bin/q` (antes de um `git pull`, rode `chattr -i` no arquivo).
-- **Agentes que já estavam rodando não recarregam instruções.** Depois de mudar config ou modelo, feche a aba
-  (`herdr tab close <id>`) e rode o setup de novo.
-- **Git é com o agente de repositório.** Mandar limpeza de branches para os agentes de projeto funciona, mas espalha a
-  responsabilidade e fura o escopo deles.
+- **OpenCode `.md` agent permissions beat everything.** If the primary agent (`OPENCODE_AGENT`) declares `permission`
+  in its frontmatter, those rules are applied after `OPENCODE_CONFIG` and override the scope generated here. An
+  `edit: allow` lets the repository agent edit files; a `bash: ask` makes the agents get stuck as `blocked` on every
+  command. Keep the primary agent free of `permission`. To check the effective rules:
+  `OPENCODE_CONFIG=.herdr-db/agents/<name>.opencode.json opencode debug agent <agent>`.
+- **Agents can break their own tools.** An agent once overwrote `q` and updated the database by hand after storing a
+  wrong answer. That is why `answer` accepts corrections and the task footer forbids touching `q` and the database. For
+  an extra lock (Linux/ext4, as root): `chattr +i contrib/herdr-db/bin/q` (run `chattr -i` on it before a `git pull`).
+- **An orchestrator started before `CLAUDE.md` existed is just a regular assistant.** A Claude session opened before
+  the setup created the instructions implemented the fix itself and used its own sub-agents instead of the queue.
+  Instructions only load at startup: after the first setup, restart any open orchestrator session.
+- **Running agents do not reload instructions.** After changing config or model, close the tab
+  (`herdr tab close <id>`) and run the setup again.
+- **Git belongs to the repository agent.** Sending branch cleanup to the project agents works, but it spreads the
+  responsibility around and breaks their scope.
 
-## Licença
+## License
 
-As mesmas do projeto original: Apache-2.0 (veja `LICENSE` na raiz). herdr é de herdrdev; este diretório é uma
-contribuição independente, sem vínculo com os autores originais.
+Same as the original project: Apache-2.0 (see `LICENSE` at the root). herdr belongs to herdrdev; this directory is an
+independent contribution, not affiliated with the original authors.

@@ -1,38 +1,38 @@
-# Config de exemplo do herdr-db-setup (é um arquivo bash, carregado com `source`).
-# Copie para a raiz do seu workspace (ex.: ~/projetos/minha-empresa/herdr-db.sh) e ajuste.
+# Example config for herdr-db-setup (a bash file, loaded with `source`).
+# Copy it to the root of your workspace (e.g. ~/projects/my-company/herdr-db.sh) and adjust it.
 
-# Nome do workspace no herdr.
-WS_LABEL="minha-empresa"
+# Workspace name in herdr.
+WS_LABEL="my-company"
 
-# Raiz do workspace. As pastas das abas (TABS) são relativas a ela.
-# O estado (instruções geradas, fila e shim do q) fica em $ROOT_DIR/.herdr-db/.
+# Workspace root. Tab folders (TABS) are relative to it.
+# State (generated instructions, queue and q shim) lives in $ROOT_DIR/.herdr-db/.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Modelo e agente primary do OpenCode para as abas. Vazio = padrão do OpenCode.
-# Veja os modelos com `opencode models` e os agentes com `opencode agent list`.
-OPENCODE_MODEL=""            # ex.: "minimax/MiniMax-M2.5-highspeed"
-OPENCODE_AGENT=""            # ex.: "meu-agente" (NÃO pode declarar `permission` no frontmatter; veja o README)
+# OpenCode model and primary agent for the tabs. Empty = OpenCode default.
+# List models with `opencode models` and agents with `opencode agent list`.
+OPENCODE_MODEL=""            # e.g. "minimax/MiniMax-M2.5-highspeed"
+OPENCODE_AGENT=""            # e.g. "my-agent" (must NOT declare `permission` in its frontmatter; see the README)
 
-# Caminhos da raiz que os agentes de projeto podem LER sem pedir permissão (globs relativos a ROOT_DIR).
-# Edição nesses caminhos é negada.
+# Root paths the project agents may READ without asking (globs relative to ROOT_DIR).
+# Editing these paths is denied.
 ROOT_READONLY=("*.md" "docs/**")
 
-# Instruções extras do seu workspace (convenções, idioma, regras de commit...), somadas às dos templates.
-# Caminhos relativos a ROOT_DIR ou absolutos. Não edite os templates: use estes arquivos.
-PROJECT_INSTRUCTIONS=()      # ex.: ("docs/agentes-projeto.md")
-REPOSITORY_INSTRUCTIONS=()   # ex.: ("docs/agente-repositorio.md")
+# Extra instructions for your workspace (conventions, language, commit rules...), added to the templates.
+# Paths relative to ROOT_DIR or absolute. Do not edit the templates: use these files instead.
+PROJECT_INSTRUCTIONS=()      # e.g. ("docs/project-agents.md")
+REPOSITORY_INSTRUCTIONS=()   # e.g. ("docs/repository-agent.md")
 
-# Tempo máximo (ms) para cada agente ficar pronto ao iniciar (máx. 300000).
+# Max time (ms) for each agent to become ready when starting (max 300000).
 START_TIMEOUT=90000
 
-# Abas: "label|pasta (relativa a ROOT_DIR, ou .)|tipo|nome do agente|descrição"
-#   tipo: orchestrator  -> orquestrador (Claude Code), conversa com você e delega pela fila
-#         opencode      -> agente de projeto: escreve só na própria pasta
-#         repository    -> agente de repositório (OpenCode): lê todos os repositórios, não edita arquivos,
-#                          cuida de branch/commit/push (aceita também "git")
+# Tabs: "label|folder (relative to ROOT_DIR, or .)|type|agent name|description"
+#   type: orchestrator  -> orchestrator (Claude Code): talks to you and delegates through the queue
+#         opencode      -> project agent: writes only in its own folder
+#         repository    -> repository agent (OpenCode): reads every repository, edits no files,
+#                          owns branch/commit/push ("git" is accepted as an alias)
 TABS=(
-  "orquestrador|.|orchestrator|orquestrador|Orquestrador (você conversa aqui)."
-  "api|api|opencode|api|Backend em Node.js/Express."
-  "web|web|opencode|web|Frontend em React."
-  "repository|.|repository|repository-manager|Único responsável por commit e push."
+  "orchestrator|.|orchestrator|orchestrator|Orchestrator (you talk here)."
+  "api|api|opencode|api|Node.js/Express backend."
+  "web|web|opencode|web|React frontend."
+  "repository|.|repository|repository-manager|The only one responsible for commit and push."
 )

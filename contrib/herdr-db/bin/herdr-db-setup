@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# herdr-db-setup — monta (ou restaura) um workspace herdr com orquestrador, agentes de projeto,
-# agente de repositório e a fila de tarefas em SQLite. Idempotente: só cria o que estiver faltando.
+# herdr-db-setup — builds (or restores) a herdr workspace with an orchestrator, project agents,
+# a repository agent and the SQLite task queue. Idempotent: only creates what is missing.
 #
-#   herdr-db-setup [-c CONFIG]                  restaura o que estiver faltando
-#   herdr-db-setup [-c CONFIG] --dry-run        só mostra o que faria
-#   herdr-db-setup [-c CONFIG] --status         lista abas e agentes do workspace
-#   herdr-db-setup [-c CONFIG] --check          só verifica pré-requisitos
-#   herdr-db-setup [-c CONFIG] --no-orchestrator  não cria a aba do orquestrador
+#   herdr-db-setup [-c CONFIG]                    restore whatever is missing
+#   herdr-db-setup [-c CONFIG] --dry-run          only show what would be done
+#   herdr-db-setup [-c CONFIG] --status           list the workspace tabs and agents
+#   herdr-db-setup [-c CONFIG] --check            only check prerequisites
+#   herdr-db-setup [-c CONFIG] --no-orchestrator  do not create the orchestrator tab
 #
-# CONFIG: arquivo bash com WS_LABEL, ROOT_DIR, TABS... (default: ./herdr-db.sh). Modelo em examples/workspace.sh.
+# CONFIG: bash file with WS_LABEL, ROOT_DIR, TABS... (default: ./herdr-db.sh). See examples/workspace.sh.
 
 set -euo pipefail
 
@@ -24,7 +24,7 @@ while [ $# -gt 0 ]; do
     --status) STATUS_ONLY=1 ;;
     --check) CHECK_ONLY=1 ;;
     -h|--help) sed -n 2,11p "$0"; exit 0 ;;
-    *) echo "opção desconhecida: $1"; exit 2 ;;
+    *) echo "unknown option: $1"; exit 2 ;;
   esac
   shift
 done
@@ -35,13 +35,13 @@ die()  { printf '\033[1;31mxx\033[0m %s\n' "$*"; exit 1; }
 run()  { if [ "$DRY" = 1 ]; then echo "   [dry-run] $*"; else "$@"; fi; }
 json() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 
-[ -f "$CONFIG" ] || die "config não encontrada: $CONFIG (copie $HDB_HOME/examples/workspace.sh e ajuste)"
+[ -f "$CONFIG" ] || die "config not found: $CONFIG (copy $HDB_HOME/examples/workspace.sh and adjust it)"
 OPENCODE_MODEL=""; OPENCODE_AGENT=""; ROOT_READONLY=("*.md"); START_TIMEOUT=90000
 PROJECT_INSTRUCTIONS=(); REPOSITORY_INSTRUCTIONS=()
 # shellcheck disable=SC1090
 source "$CONFIG"
-: "${WS_LABEL:?WS_LABEL não definido em $CONFIG}" "${ROOT_DIR:?ROOT_DIR não definido em $CONFIG}"
-[ "${#TABS[@]}" -gt 0 ] || die "TABS vazio em $CONFIG"
+: "${WS_LABEL:?WS_LABEL is not set in $CONFIG}" "${ROOT_DIR:?ROOT_DIR is not set in $CONFIG}"
+[ "${#TABS[@]}" -gt 0 ] || die "TABS is empty in $CONFIG"
 ROOT_DIR="$(cd "$ROOT_DIR" && pwd)"
 STATE="$ROOT_DIR/.herdr-db"
 AGENTS_DIR="$STATE/agents"
@@ -54,36 +54,36 @@ for entry in "${TABS[@]}"; do
   case "$kind" in repository|git) GIT_AGENT="$name" ;; esac
 done
 
-# ---------------------------------------------------------------- pré-requisitos
+# ---------------------------------------------------------------- prerequisites
 check_prereqs() {
   local missing=0 need_opencode=0 need_claude=0 entry kind
   for entry in "${TABS[@]}"; do
     IFS='|' read -r _l _r kind _n _d <<<"$entry"
     case "$kind" in opencode|repository|git) need_opencode=1 ;; orchestrator) [ "$NO_ORCH" = 1 ] || need_claude=1 ;; esac
   done
-  say "Pré-requisitos"
+  say "Prerequisites"
   for bin in herdr python3 git; do
-    if command -v "$bin" >/dev/null; then echo "   $bin: ok"; else missing=1; warn "$bin ausente"; fi
+    if command -v "$bin" >/dev/null; then echo "   $bin: ok"; else missing=1; warn "$bin is missing"; fi
   done
   command -v herdr >/dev/null || echo "     herdr: https://herdr.dev (github.com/herdrdev/herdr)"
   if [ "$need_opencode" = 1 ]; then
     if command -v opencode >/dev/null; then echo "   opencode: ok"
-    else missing=1; warn "opencode ausente: curl -fsSL https://opencode.ai/install | bash"; fi
+    else missing=1; warn "opencode is missing: curl -fsSL https://opencode.ai/install | bash"; fi
   fi
   if [ "$need_claude" = 1 ]; then
     if command -v claude >/dev/null; then echo "   claude: ok"
-    else missing=1; warn "claude ausente: npm install -g @anthropic-ai/claude-code  (ou use --no-orchestrator)"; fi
+    else missing=1; warn "claude is missing: npm install -g @anthropic-ai/claude-code  (or use --no-orchestrator)"; fi
   fi
   return "$missing"
 }
 
-check_prereqs || die "corrija os pré-requisitos acima e rode de novo."
-[ "$CHECK_ONLY" = 1 ] && { say "Pré-requisitos ok."; exit 0; }
+check_prereqs || die "fix the prerequisites above and run again."
+[ "$CHECK_ONLY" = 1 ] && { say "Prerequisites ok."; exit 0; }
 
 # ---------------------------------------------------------------- --status
 if [ "$STATUS_ONLY" = 1 ]; then
   WS_ID="$(herdr workspace list | json "next((w['workspace_id'] for w in d['result']['workspaces'] if w['label']=='$WS_LABEL'), '')")"
-  [ -n "$WS_ID" ] || die "workspace '$WS_LABEL' não existe"
+  [ -n "$WS_ID" ] || die "workspace '$WS_LABEL' does not exist"
   herdr tab list --workspace "$WS_ID" | json "'\n'.join(f\"{t['tab_id']:8} {t['label']}\" for t in d['result']['tabs'])"
   echo
   herdr agent list | json "'\n'.join(f\"{a['pane_id']:8} {str(a.get('name')):18} {a['agent']:9} {a['agent_status']:8} {a['cwd']}\" for a in d['result']['agents'] if a['workspace_id']=='$WS_ID')"
@@ -91,17 +91,17 @@ if [ "$STATUS_ONLY" = 1 ]; then
 fi
 
 herdr status server 2>&1 | grep -q "status: running" \
-  || die "servidor herdr não está rodando. Abra o herdr em outro terminal (comando: herdr) e rode de novo."
+  || die "the herdr server is not running. Open herdr in another terminal (command: herdr) and run again."
 
-say "Integrações de agente do herdr"
+say "herdr agent integrations"
 for k in opencode claude; do
   command -v "$k" >/dev/null || continue
   if herdr integration status 2>/dev/null | grep -E "^$k:" | grep -q current; then echo "   $k: ok"
-  else say "instalando integração $k"; run herdr integration install "$k"; fi
+  else say "installing the $k integration"; run herdr integration install "$k"; fi
 done
 
-# ---------------------------------------------------------------- estado: shim da fila e instruções
-# render <template> <saída> CHAVE=valor...: troca {{CHAVE}} pelos valores
+# ---------------------------------------------------------------- state: queue shim and instructions
+# render <template> <output> KEY=value...: replaces {{KEY}} with the values
 render() {
   local tpl="$1" out="$2"; shift 2
   python3 - "$tpl" "$out" "$@" <<'PY'
@@ -121,17 +121,17 @@ readonly_list() {
   echo "${out}\`$STATE/\`"
 }
 
-# abs_list <arquivos...>: caminhos absolutos (relativos a ROOT_DIR), um por linha; avisa se não existir
+# abs_list <files...>: absolute paths (relative ones resolved against ROOT_DIR), one per line; warns if missing
 abs_list() {
   local f p
   for f in "$@"; do
     case "$f" in /*) p="$f" ;; *) p="$ROOT_DIR/$f" ;; esac
-    [ -f "$p" ] || warn "instrução extra não encontrada: $p" >&2
+    [ -f "$p" ] || warn "extra instructions file not found: $p" >&2
     echo "$p"
   done
 }
 
-# write_opencode_cfg <cfg> <md> <modo: project|git>
+# write_opencode_cfg <cfg> <md> <mode: project|git>
 write_opencode_cfg() {
   local extras
   if [ "$3" = git ]; then extras="$(abs_list ${REPOSITORY_INSTRUCTIONS[@]+"${REPOSITORY_INSTRUCTIONS[@]}"})"
@@ -152,31 +152,31 @@ json.dump(c, open(cfg, "w"), indent=2, ensure_ascii=False)
 PY
 }
 
-say "Estado em $STATE"
+say "State in $STATE"
 if [ "$DRY" = 1 ]; then
-  echo "   [dry-run] geraria $QSHIM (fila em $QDB), $STATE/ORCHESTRATOR.md e $AGENTS_DIR/*"
+  echo "   [dry-run] would generate $QSHIM (queue at $QDB), $STATE/ORCHESTRATOR.md and $AGENTS_DIR/*"
 else
   mkdir -p "$AGENTS_DIR"
   cat >"$QSHIM" <<EOF
 #!/bin/sh
-# gerado pelo herdr-db-setup: fila do workspace '$WS_LABEL'
+# generated by herdr-db-setup: task queue of workspace '$WS_LABEL'
 Q_DB='$QDB' Q_SELF='$QSHIM' exec '$HDB_HOME/bin/q' "\$@"
 EOF
   chmod +x "$QSHIM"
-  "$QSHIM" list >/dev/null   # cria o banco
+  "$QSHIM" list >/dev/null   # creates the database
   agents_md=""
   for entry in "${TABS[@]}"; do
     IFS='|' read -r label rel kind name desc <<<"$entry"
     [ "$kind" = orchestrator ] && continue
     [ "$rel" = "." ] || [ -d "$ROOT_DIR/$rel" ] || continue
-    agents_md+="- \`$name\` ($kind, aba \`$label\`): $desc"$'\n'
+    agents_md+="- \`$name\` ($kind, tab \`$label\`): $desc"$'\n'
   done
   render "$TEMPLATES/ORCHESTRATOR.md" "$STATE/ORCHESTRATOR.md" "WS=$WS_LABEL" "Q=$QSHIM" "AGENTS=${agents_md%$'\n'}" \
     "GIT_AGENT_NOTE=${GIT_AGENT:+ (\`$GIT_AGENT\`)}"
-  echo "   fila: $QSHIM  (banco $QDB)"
-  echo "   instruções do orquestrador: $STATE/ORCHESTRATOR.md"
+  echo "   queue: $QSHIM  (database $QDB)"
+  echo "   orchestrator instructions: $STATE/ORCHESTRATOR.md"
   [ -d "$ROOT_DIR/.git" ] && ! grep -qs '^\.herdr-db' "$ROOT_DIR/.gitignore" \
-    && warn "$ROOT_DIR é um repositório git: considere adicionar .herdr-db/ ao .gitignore"
+    && warn "$ROOT_DIR is a git repository: consider adding .herdr-db/ to .gitignore"
 fi
 
 # ---------------------------------------------------------------- workspace
@@ -186,18 +186,18 @@ if [ -z "$WS_ID" ]; then
   run herdr workspace create --label "$WS_LABEL" --cwd "$ROOT_DIR" --no-focus >/dev/null
   if [ "$DRY" = 1 ]; then WS_ID="WS_DRY"; else
     WS_ID="$(herdr workspace list | json "next((w['workspace_id'] for w in d['result']['workspaces'] if w['label']=='$WS_LABEL'), '')")"
-    [ -n "$WS_ID" ] || die "não consegui criar/achar o workspace $WS_LABEL"
+    [ -n "$WS_ID" ] || die "could not create/find workspace $WS_LABEL"
   fi
-  echo "   criado: $WS_ID"
+  echo "   created: $WS_ID"
 else
-  echo "   existe: $WS_ID"
+  echo "   exists: $WS_ID"
 fi
 
 tab_by_label() { [ "$WS_ID" = WS_DRY ] && return; herdr tab list --workspace "$WS_ID" | json "next((t['tab_id'] for t in d['result']['tabs'] if t['label']=='$1'), '')"; }
 pane_of_tab()  { herdr pane list --workspace "$WS_ID" | json "next((p['pane_id'] for p in d['result']['panes'] if p['tab_id']=='$1'), '')"; }
 agent_on_pane(){ herdr agent list | json "next((str(a.get('name'))+'|'+a['agent'] for a in d['result']['agents'] if a['pane_id']=='$1'), '')"; }
 
-# workspace novo: a aba inicial vazia vira a primeira aba da lista (evita aba sobrando)
+# new workspace: its empty initial tab becomes the first tab of the list (avoids a leftover tab)
 first_label=""
 for entry in "${TABS[@]}"; do
   IFS='|' read -r label _r kind _n _d <<<"$entry"
@@ -208,7 +208,7 @@ if [ "$DRY" = 0 ] && [ -n "$first_label" ] && [ -z "$(tab_by_label "$first_label
   if [ "$(herdr tab list --workspace "$WS_ID" | json "len(d['result']['tabs'])")" = "1" ]; then
     first="$(herdr tab list --workspace "$WS_ID" | json "d['result']['tabs'][0]['tab_id']")"
     first_pane="$(pane_of_tab "$first")"
-    # só reaproveita se não houver agente rodando nela
+    # only reuse it if no agent is running there
     [ -z "$(agent_on_pane "$first_pane")" ] && herdr tab rename "$first" "$first_label" >/dev/null
   fi
 fi
@@ -218,18 +218,18 @@ for entry in "${TABS[@]}"; do
   IFS='|' read -r label rel kind name desc <<<"$entry"
   [ "$kind" = orchestrator ] && [ "$NO_ORCH" = 1 ] && continue
   dir="$ROOT_DIR"; [ "$rel" != "." ] && dir="$ROOT_DIR/$rel"
-  [ -d "$dir" ] || { warn "pasta ausente, pulando $label: $dir"; continue; }
+  [ -d "$dir" ] || { warn "missing folder, skipping $label: $dir"; continue; }
   case "$kind" in
     orchestrator) agent_kind=claude ;;
     opencode|repository|git) agent_kind=opencode ;;
-    *) warn "tipo desconhecido '$kind' na aba $label (use orchestrator, opencode ou repository)"; continue ;;
+    *) warn "unknown type '$kind' in tab $label (use orchestrator, opencode or repository)"; continue ;;
   esac
 
-  say "Aba '$label'  ($kind, $dir)"
+  say "Tab '$label'  ($kind, $dir)"
   cfgenv=()
   if [ "$agent_kind" = opencode ]; then
     md="$AGENTS_DIR/$name.md"; cfg="$AGENTS_DIR/$name.opencode.json"
-    if [ "$DRY" = 1 ]; then echo "   [dry-run] geraria $md e $cfg"
+    if [ "$DRY" = 1 ]; then echo "   [dry-run] would generate $md and $cfg"
     else
       if [ "$kind" = repository ] || [ "$kind" = git ]; then
         render "$TEMPLATES/repository-agent.md" "$md" "NAME=$name" "ROOT=$ROOT_DIR" "Q=$QSHIM"
@@ -237,10 +237,10 @@ for entry in "${TABS[@]}"; do
       else
         render "$TEMPLATES/project-agent.md" "$md" "LABEL=$label" "DIR=$dir" "DESC=$desc" "ROOT=$ROOT_DIR" \
           "READONLY=$(readonly_list)" "Q=$QSHIM" \
-          "GIT_RULE=${GIT_AGENT:+ Isso é do agente \`$GIT_AGENT\`.}"
+          "GIT_RULE=${GIT_AGENT:+ That is the job of the \`$GIT_AGENT\` agent.}"
         write_opencode_cfg "$cfg" "$md" project
       fi
-      echo "   instruções e permissões geradas em $AGENTS_DIR/$name.*"
+      echo "   instructions and permissions generated in $AGENTS_DIR/$name.*"
     fi
     cfgenv=(--env "OPENCODE_CONFIG=$cfg")
   fi
@@ -257,36 +257,36 @@ for entry in "${TABS[@]}"; do
 
   cur=""; [ "$pane" = "PANE_DRY" ] || cur="$(agent_on_pane "$pane")"
   if [ -n "$cur" ] && [ "${cur#*|}" = "$agent_kind" ]; then
-    if [ "${cur%%|*}" != "$name" ]; then run herdr agent rename "$pane" "$name" >/dev/null; echo "   agente já rodando; nome ajustado para '$name'"
-    else echo "   ok: agente '$name' já está rodando"; fi
-    # instruções/permissões só valem para agentes iniciados com OPENCODE_CONFIG
+    if [ "${cur%%|*}" != "$name" ]; then run herdr agent rename "$pane" "$name" >/dev/null; echo "   agent already running; renamed to '$name'"
+    else echo "   ok: agent '$name' is already running"; fi
+    # instructions/permissions only apply to agents started with OPENCODE_CONFIG
     [ "$agent_kind" = opencode ] && NEED_RESTART+=("$label")
     continue
   fi
 
-  # aba já existia só com o shell (ex.: a aba inicial do workspace, aberta na raiz):
-  # entra na pasta da aba e exporta a config antes de iniciar o agente
+  # the tab already existed with just a shell (e.g. the workspace's initial tab, opened at the root):
+  # cd into the tab folder and export the config before starting the agent
   if [ "$pane" != "PANE_DRY" ]; then
     run herdr pane run "$pane" "cd '$dir'" >/dev/null
     [ "$agent_kind" = opencode ] && run herdr pane run "$pane" "export OPENCODE_CONFIG='$AGENTS_DIR/$name.opencode.json'" >/dev/null
   fi
   run herdr agent start "$name" --kind "$agent_kind" --pane "$pane" --timeout "$START_TIMEOUT" >/dev/null
-  echo "   agente '$name' iniciado"
+  echo "   agent '$name' started"
 done
 
-say "Resultado"
-[ "$DRY" = 1 ] && { echo "   (dry-run: nada foi alterado)"; exit 0; }
+say "Result"
+[ "$DRY" = 1 ] && { echo "   (dry-run: nothing was changed)"; exit 0; }
 "$0" -c "$CONFIG" --status
 echo
 if [ "${#NEED_RESTART[@]}" -gt 0 ]; then
-  warn "Estes agentes já estavam rodando e só recebem instruções/permissões novas se forem recriados:"
+  warn "These agents were already running and only pick up new instructions/permissions when recreated:"
   echo "     ${NEED_RESTART[*]}"
-  echo "     Para aplicar: herdr tab close <id> e rode o setup de novo (não fecho sozinho para não interromper trabalho)."
+  echo "     To apply: herdr tab close <id> and run the setup again (not done automatically so no work is interrupted)."
   echo
 fi
 cat <<EOF
-Próximos passos:
-  - Orquestrador: inclua as instruções dele no CLAUDE.md da raiz com a linha
+Next steps:
+  - Orchestrator: load its instructions from the root CLAUDE.md with the line
         @.herdr-db/ORCHESTRATOR.md
-  - Fila: $QSHIM --help   (dica: alias q='$QSHIM')
+  - Queue: $QSHIM --help   (tip: alias q='$QSHIM')
 EOF
