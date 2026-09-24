@@ -1,5 +1,11 @@
 # herdr
 
+> [!NOTE]
+> **Unofficial fork — branch `custom/db-orchestrator`.** This branch adds [`contrib/herdr-db/`](contrib/herdr-db/README.md):
+> an orchestrator + scoped sub-agents setup with a SQLite task queue, built on top of herdr. herdr itself is unchanged.
+> The original project is **[herdrdev/herdr](https://github.com/herdrdev/herdr)** ([herdr.dev](https://herdr.dev)); please use and support it.
+> (This notice is the only modification to upstream files.)
+
 
 <p align="center">
   <img src="assets/logo.png" alt="herdr" width="100" />
